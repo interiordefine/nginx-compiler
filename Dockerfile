@@ -68,7 +68,10 @@ RUN apt-get update &&\
     apt-get install -y software-properties-common &&\
     apt-add-repository ppa:brightbox/ruby-ng &&\
     apt-get update &&\
-    apt-get install -y apt-utils autoconf build-essential curl git libcurl4-openssl-dev libgeoip-dev liblmdb-dev libpam0g-dev libpcre++-dev libperl-dev libtool libxml2-dev libxslt-dev libyajl-dev pkgconf ruby-dev ruby2.7 ruby2.7-dev vim wget zlib1g-dev 
+    apt-get install -y apt-utils autoconf build-essential curl git libcurl4-openssl-dev libgeoip-dev liblmdb-dev libpam0g-dev libpcre++-dev libperl-dev libtool libxml2-dev libxslt-dev libyajl-dev pkgconf ruby-dev ruby2.7 ruby2.7-dev vim wget zlib1g-dev ca-certificates
+
+RUN update-ca-certificates -f && \
+    echo "ca_certificate=/etc/ssl/certs/ca-certificates.crt" > ~/.wgetrc
 
 # NGINX seems to require a specific version of automake, but only sometimes...
 RUN wget https://ftp.gnu.org/gnu/automake/automake-${AUTOMAKE_VERSION}.tar.gz -P /usr/local/sources &&\
@@ -305,37 +308,37 @@ RUN generate_deb.rb passenger ${PASSENGER_DEB_VERSION} binary '{"Suggests":"ruby
 
 ######################################################################################################################################################################################################################################
 
-FROM base AS passenger-enterprise-true
-ARG PASSENGER_VERSION
-ARG NGINX_VERSION
-ARG NGINX_DEB_VERSION
-ARG PASSENGER_DEB_VERSION
-ARG NGINX_PASSENGER_MODULE_DEB_VERSION
-WORKDIR /usr/local/build
+#FROM base AS passenger-enterprise-true
+#ARG PASSENGER_VERSION
+#ARG NGINX_VERSION
+#ARG NGINX_DEB_VERSION
+#ARG PASSENGER_DEB_VERSION
+#ARG NGINX_PASSENGER_MODULE_DEB_VERSION
+#WORKDIR /usr/local/build
 
-ADD setup_passenger.rb /usr/local/bin
+#ADD setup_passenger.rb /usr/local/bin
 
 # NOTE: prerequisites for the apache module - compilation process installs everything, unfortunately
-RUN apt-get install -y apache2 apache2-dev
+#RUN apt-get install -y apache2 apache2-dev
 
-COPY --from=openssl /usr/local/debs /usr/local/debs
-RUN dpkg -i /usr/local/debs/*.deb
+#COPY --from=openssl /usr/local/debs /usr/local/debs
+#RUN dpkg -i /usr/local/debs/*.deb
 
-COPY passenger_enterprise/passenger-enterprise-server-${PASSENGER_VERSION}.tar.gz /usr/local/sources
+#COPY passenger_enterprise/passenger-enterprise-server-${PASSENGER_VERSION}.tar.gz /usr/local/sources
 
-RUN tar zxf /usr/local/sources/passenger-enterprise-server-${PASSENGER_VERSION}.tar.gz &&\
-    cd passenger-enterprise-server-${PASSENGER_VERSION} &&\
-    RUBY="/usr/bin/env ruby" rake fakeroot
+#RUN tar zxf /usr/local/sources/passenger-enterprise-server-${PASSENGER_VERSION}.tar.gz &&\
+#    cd passenger-enterprise-server-${PASSENGER_VERSION} &&\
+#    RUBY="/usr/bin/env ruby" rake fakeroot
 
-RUN current_state.sh before
-RUN cp -a passenger-enterprise-server-${PASSENGER_VERSION}/pkg/fakeroot/* /
-RUN cd passenger-enterprise-server-${PASSENGER_VERSION} && setup_passenger.rb
-RUN current_state.sh after
-RUN generate_deb.rb passenger-enterprise ${PASSENGER_DEB_VERSION} binary '{"Suggests":"ruby"}'
+#RUN current_state.sh before
+#RUN cp -a passenger-enterprise-server-${PASSENGER_VERSION}/pkg/fakeroot/* /
+#RUN cd passenger-enterprise-server-${PASSENGER_VERSION} && setup_passenger.rb
+#RUN current_state.sh after
+#RUN generate_deb.rb passenger-enterprise ${PASSENGER_DEB_VERSION} binary '{"Suggests":"ruby"}'
 
-FROM base AS passenger-enterprise-false
+FROM base AS passenger-enterprise
 
-FROM passenger-enterprise-${INCLUDE_PASSENGER_ENTERPRISE} AS passenger-enterprise
+#FROM passenger-enterprise-${INCLUDE_PASSENGER_ENTERPRISE} AS passenger-enterprise
 
 ######################################################################################################################################################################################################################################
 
@@ -371,7 +374,6 @@ ARG UPSTREAM_FAIR_MODULE_VERSION
 ARG HTTP_SUBSTITUTIONS_FILTER_MODULE_VERSION
 ARG HTTP_GEOIP2_MODULE_VERSION
 ARG NGX_MRUBY_VERSION
-
 ARG NGINX_DEB_VERSION
 
 WORKDIR /usr/local/build
@@ -389,13 +391,15 @@ RUN dpkg -i /usr/local/debs/*.deb
 
 ADD include_modules.rb /usr/local/bin
 
+RUN echo "NGINX" && echo "${NGINX_VERSION}"
+
 # NOTE: required to use the new openssl version that is installed in the above debs
 # TODO: when using a custom openssl directory, configuring passenger fails with -lcrypto fails and wasn't able to figure it out just yet (fixing custom include using CPATH worked, unlike with-cc-opt)
 # ENV PATH="${PATH}:/usr/local/ssl/bin"
 # ENV CPATH=/usr/local/ssl/include
 
 # MODULE SOURCES
-# directory name: modsecurity-nginx-v${MODSECURITY_MODULE_VERSION}
+# directorwy name: modsecurity-nginx-v${MODSECURITY_MODULE_VERSION}
 RUN wget https://github.com/SpiderLabs/ModSecurity-nginx/releases/download/v${MODSECURITY_MODULE_VERSION}/modsecurity-nginx-v${MODSECURITY_MODULE_VERSION}.tar.gz -P /usr/local/sources && tar zxf /usr/local/sources/modsecurity-nginx-v${MODSECURITY_MODULE_VERSION}.tar.gz
 # directory name: headers-more-nginx-module-${HEADERS_MORE_MODULE_VERSION}
 RUN wget https://github.com/openresty/headers-more-nginx-module/archive/refs/tags/v${HEADERS_MORE_MODULE_VERSION}.tar.gz -P /usr/local/sources && tar zxf /usr/local/sources/v${HEADERS_MORE_MODULE_VERSION}.tar.gz
@@ -467,6 +471,8 @@ ENV NGINX_CONFIGURE_OPTIONS_WITHOUT_MODULES="\
 --with-stream \
 "
 
+RUN echo "NGINX VERSION " && echo ${NGINX_VERSION}
+
 # NOTE: get NGINX source code here because mruby also needs it
 RUN wget https://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz -P /usr/local/sources &&\
     tar zxf /usr/local/sources/nginx-${NGINX_VERSION}.tar.gz
@@ -522,9 +528,11 @@ RUN cd nginx-${NGINX_VERSION} &&\
         --add-module=/usr/local/build/ngx_http_substitutions_filter_module-${HTTP_SUBSTITUTIONS_FILTER_MODULE_VERSION} \
         --add-module=/usr/local/build/ngx_http_geoip2_module-${HTTP_GEOIP2_MODULE_VERSION} \
         --add-module=/usr/local/build/ngx_mruby-${NGX_MRUBY_VERSION} \
-        --add-module=/usr/local/build/modsecurity-nginx-v${MODSECURITY_MODULE_VERSION}" >> real_configure &&\
+        --add-module=/usr/local/build/modsecurity-nginx-v${MODSECURITY_MODULE_VERSION}" >> real_configure
+RUN cd nginx-${NGINX_VERSION} && \
     chmod +x ./real_configure &&\
-    ./real_configure &&\
+    ./real_configure
+RUN ls -alh && cd nginx-${NGINX_VERSION} && \
     make &&\
     make install
 
@@ -581,6 +589,7 @@ RUN generate_deb.rb nginx ${NGINX_DEB_VERSION} binary '{"Depends":"libcurl4-open
 
 FROM nginx AS nginx-passenger
 
+ARG NGINX_VERSION
 ARG NGINX_DEB_VERSION
 ARG PASSENGER_DEB_VERSION
 ARG NGINX_PASSENGER_MODULE_DEB_VERSION
@@ -593,6 +602,8 @@ RUN dpkg -i /usr/local/debs/*.deb
 
 # make sure to clean any existing modules
 RUN rm -rf /usr/lib/nginx/modules/*
+
+RUN echo "PASSENGER CONFIG:" && echo $(passenger-config --nginx-addon-dir)
 
 RUN cd nginx-${NGINX_VERSION} &&\
     echo '#!/usr/bin/env bash' >> real_passenger_configure &&\
@@ -621,8 +632,8 @@ RUN cd nginx-${NGINX_VERSION} &&\
         --with-stream_geoip_module \
         --with-stream_ssl_module \
         --with-stream_ssl_preread_module \
-        --add-dynamic-module=$(passenger-config --nginx-addon-dir)" >> real_passenger_configure &&\
-    chmod +x ./real_passenger_configure &&\
+        --add-dynamic-module=$(passenger-config --nginx-addon-dir)" >> real_passenger_configure
+RUN ls -alh && echo "HI" && cd nginx-${NGINX_VERSION} && chmod +x ./real_passenger_configure &&\
     ./real_passenger_configure &&\
     make modules
 
@@ -634,58 +645,59 @@ RUN generate_deb.rb nginx-module-http-passenger ${NGINX_PASSENGER_MODULE_DEB_VER
 
 ######################################################################################################################################################################################################################################
 
-FROM nginx AS nginx-passenger-enterprise-true
+#FROM nginx AS nginx-passenger-enterprise-true
 
-ARG NGINX_DEB_VERSION
-ARG PASSENGER_DEB_VERSION
-ARG NGINX_PASSENGER_MODULE_DEB_VERSION
+#ARG NGINX_VERSION
+#ARG NGINX_DEB_VERSION
+#ARG PASSENGER_DEB_VERSION
+#ARG NGINX_PASSENGER_MODULE_DEB_VERSION
 
-ADD include_modules.rb /usr/local/bin
+#ADD include_modules.rb /usr/local/bin
 
-RUN rm -rf /usr/local/debs/*.deb
-COPY --from=passenger-enterprise /usr/local/debs /usr/local/debs
-RUN dpkg -i /usr/local/debs/*.deb
+#RUN rm -rf /usr/local/debs/*.deb
+#COPY --from=passenger-enterprise /usr/local/debs /usr/local/debs
+#RUN dpkg -i /usr/local/debs/*.deb
 
 # make sure to clean any existing modules
-RUN rm -rf /usr/lib/nginx/modules/*
+#RUN rm -rf /usr/lib/nginx/modules/*
 
-RUN cd nginx-${NGINX_VERSION} &&\
-    echo '#!/usr/bin/env bash' >> real_passenger_enterprise_configure &&\
-    echo "./configure \
-        ${NGINX_CONFIGURE_OPTIONS_WITHOUT_MODULES} \
-        --with-http_ssl_module \
-        --with-http_stub_status_module \
-        --with-http_realip_module \
-        --with-http_auth_request_module \
-        --with-http_v2_module \
-        --with-http_dav_module \
-        --with-http_slice_module \
-        --with-http_addition_module \
-        --with-http_flv_module \
-        --with-http_geoip_module \
-        --with-http_gunzip_module \
-        --with-http_gzip_static_module \
-        --with-http_image_filter_module \
-        --with-http_mp4_module \
-        --with-http_perl_module=dynamic \
-        --with-http_random_index_module \
-        --with-http_secure_link_module \
-        --with-http_sub_module \
-        --with-http_xslt_module \
-        --with-mail_ssl_module \
-        --with-stream_geoip_module \
-        --with-stream_ssl_module \
-        --with-stream_ssl_preread_module \
-        --add-dynamic-module=$(passenger-config --nginx-addon-dir)" >> real_passenger_enterprise_configure &&\
-    chmod +x ./real_passenger_enterprise_configure &&\
-    ./real_passenger_enterprise_configure &&\
-    make modules
+#RUN cd nginx-${NGINX_VERSION} &&\
+#    echo '#!/usr/bin/env bash' >> real_passenger_enterprise_configure &&\
+#    echo "./configure \
+#        ${NGINX_CONFIGURE_OPTIONS_WITHOUT_MODULES} \
+#        --with-http_ssl_module \
+#        --with-http_stub_status_module \
+#        --with-http_realip_module \
+#        --with-http_auth_request_module \
+#        --with-http_v2_module \
+#        --with-http_dav_module \
+#        --with-http_slice_module \
+#        --with-http_addition_module \
+#        --with-http_flv_module \
+#        --with-http_geoip_module \
+#        --with-http_gunzip_module \
+#        --with-http_gzip_static_module \
+#        --with-http_image_filter_module \
+#        --with-http_mp4_module \
+#        --with-http_perl_module=dynamic \
+#        --with-http_random_index_module \
+#        --with-http_secure_link_module \
+#        --with-http_sub_module \
+#        --with-http_xslt_module \
+#        --with-mail_ssl_module \
+#        --with-stream_geoip_module \
+#        --with-stream_ssl_module \
+#        --with-stream_ssl_preread_module \
+#        --add-dynamic-module=$(passenger-config --nginx-addon-dir)" >> real_passenger_enterprise_configure &&\
+#    chmod +x ./real_passenger_enterprise_configure &&\
+#    ./real_passenger_enterprise_configure &&\
+#    make modules
 
-RUN current_state.sh before
-RUN cp /usr/local/build/nginx-${NGINX_VERSION}/objs/ngx_http_passenger_module.so /usr/lib/nginx/modules/ngx_http_passenger_module.so
-RUN include_modules.rb
-RUN current_state.sh after
-RUN generate_deb.rb nginx-module-http-passenger-enterprise ${NGINX_PASSENGER_MODULE_DEB_VERSION} binary "{\"Depends\":\"passenger-enterprise (= ${PASSENGER_DEB_VERSION}), nginx (= ${NGINX_DEB_VERSION})\"}"
+#RUN current_state.sh before
+#RUN cp /usr/local/build/nginx-${NGINX_VERSION}/objs/ngx_http_passenger_module.so /usr/lib/nginx/modules/ngx_http_passenger_module.so
+#RUN include_modules.rb
+#RUN current_state.sh after
+#RUN generate_deb.rb nginx-module-http-passenger-enterprise ${NGINX_PASSENGER_MODULE_DEB_VERSION} binary "{\"Depends\":\"passenger-enterprise (= ${PASSENGER_DEB_VERSION}), nginx (= ${NGINX_DEB_VERSION})\"}"
 
 FROM nginx AS nginx-passenger-enterprise-false
 
@@ -721,29 +733,29 @@ RUN mkdir -p ${DEB_DIRECTORY}
 RUN mkdir -p ${DEB_DIRECTORY}/prerequisites
 RUN mkdir -p ${DEB_DIRECTORY}/nginx
 
-RUN mv /usr/local/debs/modsecurity_${MODSECURITY_DEB_VERSION}_amd64.deb \
-       /usr/local/debs/openresty-luajit_${LUAJIT2_DEB_VERSION}_amd64.deb \
-       /usr/local/debs/openresty-lua-core_${LUA_RESTY_CORE_DEB_VERSION}_amd64.deb \
-       /usr/local/debs/openresty-lua-lrucache_${LUA_RESTY_LRUCACHE_DEB_VERSION}_amd64.deb \
+RUN mv /usr/local/debs/modsecurity_${MODSECURITY_DEB_VERSION}_arm64.deb \
+       /usr/local/debs/openresty-luajit_${LUAJIT2_DEB_VERSION}_arm64.deb \
+       /usr/local/debs/openresty-lua-core_${LUA_RESTY_CORE_DEB_VERSION}_arm64.deb \
+       /usr/local/debs/openresty-lua-lrucache_${LUA_RESTY_LRUCACHE_DEB_VERSION}_arm64.deb \
        ${DEB_DIRECTORY}/prerequisites
-RUN mv /usr/local/debs/nginx_${NGINX_DEB_VERSION}_amd64.deb ${DEB_DIRECTORY}/nginx
+RUN mv /usr/local/debs/nginx_${NGINX_DEB_VERSION}_arm64.deb ${DEB_DIRECTORY}/nginx
 
 RUN mkdir -p ${DEB_DIRECTORY}/passenger
 RUN mkdir -p ${DEB_DIRECTORY}/passenger-module
-RUN mv /usr/local/debs/passenger_${PASSENGER_DEB_VERSION}_amd64.deb ${DEB_DIRECTORY}/passenger
-RUN mv /usr/local/debs/nginx-module-http-passenger_${NGINX_PASSENGER_MODULE_DEB_VERSION}_amd64.deb ${DEB_DIRECTORY}/passenger-module
+RUN mv /usr/local/debs/passenger_${PASSENGER_DEB_VERSION}_arm64.deb ${DEB_DIRECTORY}/passenger
+RUN mv /usr/local/debs/nginx-module-http-passenger_${NGINX_PASSENGER_MODULE_DEB_VERSION}_arm64.deb ${DEB_DIRECTORY}/passenger-module
 
 ######################################################################################################################################################################################################################################
 
-FROM prefinal-base AS prefinal-passenger-enterprise-true
+#FROM prefinal-base AS prefinal-passenger-enterprise-true
 
-COPY --from=nginx-passenger-enterprise /usr/local/debs /usr/local/debs
-COPY --from=passenger-enterprise /usr/local/debs /usr/local/debs
+#COPY --from=nginx-passenger-enterprise /usr/local/debs /usr/local/debs
+#COPY --from=passenger-enterprise /usr/local/debs /usr/local/debs
 
-RUN mkdir -p ${DEB_DIRECTORY}/passenger-enterprise
-RUN mkdir -p ${DEB_DIRECTORY}/passenger-enterprise-module
-RUN mv /usr/local/debs/passenger-enterprise_${PASSENGER_DEB_VERSION}_amd64.deb ${DEB_DIRECTORY}/passenger-enterprise
-RUN mv /usr/local/debs/nginx-module-http-passenger-enterprise_${NGINX_PASSENGER_MODULE_DEB_VERSION}_amd64.deb ${DEB_DIRECTORY}/passenger-enterprise-module
+#RUN mkdir -p ${DEB_DIRECTORY}/passenger-enterprise
+#RUN mkdir -p ${DEB_DIRECTORY}/passenger-enterprise-module
+#RUN mv /usr/local/debs/passenger-enterprise_${PASSENGER_DEB_VERSION}_arm64.deb ${DEB_DIRECTORY}/passenger-enterprise
+#RUN mv /usr/local/debs/nginx-module-http-passenger-enterprise_${NGINX_PASSENGER_MODULE_DEB_VERSION}_arm64.deb ${DEB_DIRECTORY}/passenger-enterprise-module
 
 FROM prefinal-base AS prefinal-passenger-enterprise-false
 
@@ -775,28 +787,28 @@ RUN touch /tmp/test_successful
 
 ######################################################################################################################################################################################################################################
 
-FROM ubuntu:$OPERATING_SYSTEM_VERSION AS test-passenger-enterprise-true
-ARG NGINX_VERSION
-ARG PASSENGER_VERSION
+#FROM ubuntu:$OPERATING_SYSTEM_VERSION AS test-passenger-enterprise-true
+#ARG NGINX_VERSION
+#ARG PASSENGER_VERSION
 
-ENV DEBIAN_FRONTEND=noninteractive
+#ENV DEBIAN_FRONTEND=noninteractive
 
-COPY --from=prefinal /nginx.tar.gz /nginx.tar.gz
+#COPY --from=prefinal /nginx.tar.gz /nginx.tar.gz
 
-RUN tar -C / -zxvf nginx.tar.gz
+#RUN tar -C / -zxvf nginx.tar.gz
 
-ADD passenger_enterprise/passenger-enterprise-license /etc/passenger-enterprise-license
+#ADD passenger_enterprise/passenger-enterprise-license /etc/passenger-enterprise-license
 
 # NOTE: dpkg doesn't respect dependencies if you just give it a list of all packages to install, but apt does
-RUN apt update && apt install -y /usr/local/debs/**/prerequisites/*.deb /usr/local/debs/**/nginx/*.deb /usr/local/debs/**/passenger-enterprise/*.deb /usr/local/debs/**/passenger-enterprise-module/*.deb
+#RUN apt update && apt install -y /usr/local/debs/**/prerequisites/*.deb /usr/local/debs/**/nginx/*.deb /usr/local/debs/**/passenger-enterprise/*.deb /usr/local/debs/**/passenger-enterprise-module/*.deb
 
 # NOTE: curl is a requirement for test_nginx.sh and ruby is a requirement for Passenger
-RUN apt-get update && apt-get install -y curl ruby
+#RUN apt-get update && apt-get install -y curl ruby
 
-ADD test_nginx.sh /usr/local/bin
-ADD test_nginx.conf /etc/nginx/nginx.conf
-RUN test_nginx.sh
-RUN touch /tmp/test_successful
+#ADD test_nginx.sh /usr/local/bin
+#ADD test_nginx.conf /etc/nginx/nginx.conf
+#RUN test_nginx.sh
+#RUN touch /tmp/test_successful
 
 FROM ubuntu:$OPERATING_SYSTEM_VERSION AS test-passenger-enterprise-false
 
@@ -804,11 +816,11 @@ FROM test-passenger-enterprise-${INCLUDE_PASSENGER_ENTERPRISE} AS test-passenger
 
 ######################################################################################################################################################################################################################################
 
-FROM ubuntu:$OPERATING_SYSTEM_VERSION AS final-true
-COPY --from=prefinal /nginx.tar.gz /nginx.tar.gz
+#FROM ubuntu:$OPERATING_SYSTEM_VERSION AS final-true
+#COPY --from=prefinal /nginx.tar.gz /nginx.tar.gz
 # NOTE: make test as dependency before this final image builds
-COPY --from=test-passenger /tmp/test_successful /tmp/test_successful
-COPY --from=test-passenger-enterprise /tmp/test_successful /tmp/test_successful
+#COPY --from=test-passenger /tmp/test_successful /tmp/test_successful
+#COPY --from=test-passenger-enterprise /tmp/test_successful /tmp/test_successful
 
 FROM ubuntu:$OPERATING_SYSTEM_VERSION AS final-false
 COPY --from=prefinal /nginx.tar.gz /nginx.tar.gz
